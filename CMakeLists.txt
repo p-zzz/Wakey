@@ -15,8 +15,11 @@ add_library(gateway_core STATIC src/wol.cpp src/health.cpp)
 target_link_libraries(gateway_core PRIVATE httplib)
 target_compile_options(gateway_core PRIVATE -Wall -Wextra)
 
+add_library(json INTERFACE)
+target_include_directories(json INTERFACE third_party)
+
 add_executable(wakey src/gateway.cpp)
-target_link_libraries(wakey PRIVATE gateway_core httplib)
+target_link_libraries(wakey PRIVATE gateway_core httplib json)
 target_compile_options(wakey PRIVATE -Wall -Wextra)
 
 add_executable(wake-and-wait src/wake_and_wait.cpp)
