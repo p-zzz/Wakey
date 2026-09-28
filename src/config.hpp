@@ -1,4 +1,5 @@
 #pragma once
+#include "net_guard.hpp"
 #include "wol.hpp"
 #include <optional>
 #include <string>
@@ -22,7 +23,7 @@ struct Backend {
 struct Config {
     std::string bind_address;
     int port;
-    std::string allowed_clients;
+    Ipv4Cidr allowed_clients;
     std::string default_model;
     std::vector<Backend> backends;
 };

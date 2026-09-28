@@ -1,11 +1,21 @@
 #include "net_guard.hpp"
 #include <arpa/inet.h>
 #include <charconv>
-#include <iostream>
 #include <netinet/in.h>
 #include <optional>
+#include <array>
+#include <sys/types.h>
 
 namespace gw {
+
+namespace {
+    const std::array<Ipv4Cidr, 4> kPrivateRanges = {{
+        {0x0A000000, 8},    // 10.0.0.0/8
+        {0xAC100000, 12},   // 172.16.0.0/12
+        {0xC0A80000, 16},   // 192.168.0.0/16
+        {0x7F000000, 8},    // 127.0.0.0/8 (loopback)
+    }};
+}
 
 std::optional<std::uint32_t> parse_ipv4(const std::string &text) {
     in_addr addr{};
@@ -37,6 +47,15 @@ std::optional<Ipv4Cidr> parse_cidr(const std::string& text){
     if (ipv4.contains(ipv4.network)) return ipv4;
 
     return std::nullopt;
+}
+
+bool is_private(const Ipv4Cidr& range) {
+    for (const Ipv4Cidr& p : kPrivateRanges) {
+        if (p.contains(range.network) && range.prefix >= p.prefix) {
+            return true;
+        }
+    }
+    return false;
 }
 
 } // namespace gw

@@ -20,6 +20,15 @@ bool in_range(const char* cidr, const char* ip) {
     return range && addr && range->contains(*addr);
 }
 
+bool private_cidr(const char* cidr) {
+    const auto range = gw::parse_cidr(cidr);
+    if (!range) {
+        check(false, "test input is not a valid CIDR");
+        return false;
+    }
+    return gw::is_private(*range);
+}
+
 }  // namespace
 
 int main() {
@@ -61,6 +70,12 @@ int main() {
     // contains: ranges that don't fall on a byte boundary
     check(in_range("172.16.0.0/12", "172.31.255.255"), "172.31.255.255 is inside 172.16.0.0/12");
     check(!in_range("172.16.0.0/12", "172.32.0.0"), "172.32.0.0 is outside 172.16.0.0/12");
+
+    // is_private
+    check(!private_cidr("8.8.8.0/24"), "Google DNS, public");
+    check(!private_cidr("203.0.113.0/24"), "Another clearly public example");
+    check(!private_cidr("10.0.0.0/7"), "Extends to 11.x.x.x, which is private");
+    check(!private_cidr("192.168.0.0/15"), "Extends to 192.169.x.x, which is private");
 
     if (failures == 0) {
         std::cout << "all net_guard tests passed\n";

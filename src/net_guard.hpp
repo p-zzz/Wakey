@@ -12,9 +12,11 @@ namespace gw {
 
         std::uint32_t mask() const { return prefix == 0 ? 0 : ~std::uint32_t{0} << (32 - prefix); }
         bool contains(std::uint32_t ip) const { return (ip & mask()) == network; }
+
     };
 
     std::optional<std::uint32_t> parse_ipv4(const std::string& text);
     std::optional<Ipv4Cidr> parse_cidr(const std::string& text);
+    bool is_private(const Ipv4Cidr& range);
 
 }   // namespace gw
