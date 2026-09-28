@@ -1,0 +1,21 @@
+{
+  "bind_address": "127.0.0.1",
+  "port": 8100,
+  "allowed_clients": "127.0.0.1/8",
+  "default_model": "model-name",
+  "backends": [
+    {
+      "name": "pi",
+      "host": "localhost",
+      "port": 8080,
+      "models": ["model-name"]
+    },
+    {
+      "name": "pc",
+      "host": "local-ip-address",
+      "port": 8080,
+      "models": ["model-name"],
+      "wake": { "mac": "AA:BB:CC:DD:EE:FF", "broadcast": "192.168.x.255" }
+    }
+  ]
+}

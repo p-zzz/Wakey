@@ -1,3 +1,4 @@
+#include "config.hpp"
 #include "health.hpp"
 #include <chrono>
 #include <httplib.h>
@@ -10,27 +11,33 @@
 
 namespace {
 
-    struct Backend {
-        std::string name;
-        std::string host;
-        int port;
-    };
-
     using json = nlohmann::json;
+
+    using ModelTable = std::map<std::string, gw::Backend>;
 
     void send_error(httplib::Response& res, int status, const std::string& message) {
         res.status = status;
         res.set_content(json{{"error", message}}.dump(), "application/json");
     }
 
-    void handle_chat(const std::map<std::string, Backend>& models,
+    ModelTable build_model_table(const std::vector<gw::Backend>& backends) {
+        ModelTable table;
+        for (const gw::Backend& b : backends) {
+            for (const std::string& m : b.models) {
+                table.emplace(m, b);
+            }
+        }
+        return table;
+    }
+
+    void handle_chat(const ModelTable models, const std::string& default_model,
                     const httplib::Request& req, httplib::Response& res) {
         // Parse json
         json body;
         std::string model;
         try {
             body = json::parse(req.body);
-            model = body.value("model", "qwen3-1.7b");
+            model = body.value("model", default_model);
         } catch (const json::exception& e) {
             send_error(res, 400, e.what());
             return;
@@ -42,7 +49,7 @@ namespace {
             send_error(res, 404, "unknown model: " + model);
             return;
         }
-        const Backend& backend = it->second;
+        const gw::Backend& backend = it->second;
         std::cerr << "request for " << model << " -> " << backend.name << '\n';    // log
 
         httplib::Client client(backend.host, backend.port);           // create client
@@ -64,34 +71,41 @@ namespace {
     }
 }
 
-int main(){
+int main(int argc, char** argv){
+    // usage check
+    if (argc != 2) {
+        std::cerr << "usage: " << argv[0] << " <config.json>\n";
+        return 2;
+    }
+    gw::Config conf;
+    try {
+        conf = gw::load_config(argv[1]);
+    } catch (const std::exception& e) {
+        std::cerr << "config error: " << e.what() << '\n';
+        return 1;
+    }
+
     httplib::Server svr;
 
-    const Backend pi{"pi", "localhost", 8095};
-    const Backend pc{"pc", "192.168.1.171", 8095};
-
-    const std::map<std::string, Backend> models = {
-        {"qwen3-1.7b",  pi},
-        {"gemma-4-12b", pc},
-    };
+    const ModelTable models = build_model_table(conf.backends);
 
     svr.Get("/health", [](const httplib::Request&, httplib::Response& res) {
         res.set_content(R"({"status":"ok"})", "application/json");
     });
 
     svr.Post("/v1/chat/completions", [&](const httplib::Request &req, httplib::Response &res) {
-        handle_chat(models, req, res);
+        handle_chat(models, conf.default_model, req, res);
     });
 
     svr.set_logger([](const httplib::Request& req, const httplib::Response& res) {
         std::cerr << req.method << ' ' << req.path << " -> " << res.status << '\n';
     });
 
-    if(!svr.bind_to_port("127.0.0.1", 8100)) {
-        std::cerr << "failed to bind 127.0.0.1:8100\n";
+    if(!svr.bind_to_port(conf.bind_address, conf.port)) {
+        std::cerr << "failed to bind " << conf.bind_address << ":" << conf.port << '\n';
         return 1;
     }
 
-    std::cout << "server listening on 127.0.0.1:8100\n";
+    std::cout << "server listening on " << conf.bind_address << ":" << conf.port << '\n';
     return svr.listen_after_bind() ? 0 : 1;
 }

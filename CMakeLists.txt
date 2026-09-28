@@ -11,8 +11,8 @@ add_library(httplib STATIC third_party/cpp-httplib/httplib.cpp)
 target_include_directories(httplib PUBLIC third_party/cpp-httplib)
 target_link_libraries(httplib PUBLIC Threads::Threads)
 
-add_library(gateway_core STATIC src/wol.cpp src/health.cpp)
-target_link_libraries(gateway_core PRIVATE httplib)
+add_library(gateway_core STATIC src/wol.cpp src/health.cpp src/config.cpp)
+target_link_libraries(gateway_core PRIVATE httplib json)
 target_compile_options(gateway_core PRIVATE -Wall -Wextra)
 
 add_library(json INTERFACE)
