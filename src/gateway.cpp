@@ -1,6 +1,7 @@
 #include "config.hpp"
 #include "health.hpp"
 #include "net_guard.hpp"
+#include "auth.hpp"
 #include <chrono>
 #include <httplib.h>
 #include <iostream>
@@ -92,11 +93,24 @@ int main(int argc, char** argv){
     const ModelTable models = build_model_table(conf.backends);
 
     svr.set_pre_routing_handler([&](const httplib::Request& req, httplib::Response& res) {
+        // Check IP
         std::optional<std::uint32_t> client_ip = gw::parse_ipv4(req.remote_addr);
         if (!client_ip || !conf.allowed_clients.contains(*client_ip)) {
-            send_error(res, 403, "Forbidden: unknown IP address");
+            send_error(res, 403, "forbidden: unknown IP address");
             std::cerr << "rejected client " << req.remote_addr << '\n';
             return httplib::Server::HandlerResponse::Handled;
+        }
+        // Check API key
+        if (req.path.starts_with("/v1/")) {
+            const std::string header = req.get_header_value("Authorization");
+            const bool authorized = header.starts_with("Bearer ") &&
+                gw::constant_time_equal(header.substr(7), conf.api_key);
+            if (!authorized){
+                res.set_header("WWW-Authenticate", "Bearer");
+                send_error(res, 401, "missing or invalid API key");
+                std::cerr << "unauthorized request from " << req.remote_addr << " to " << req.path << '\n';
+                return httplib::Server::HandlerResponse::Handled;
+            }
         }
         return httplib::Server::HandlerResponse::Unhandled;
     });

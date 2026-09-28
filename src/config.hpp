@@ -21,6 +21,8 @@ struct Backend {
 };
 
 struct Config {
+    std::string api_key;
+    std::string admin_key;
     std::string bind_address;
     int port;
     Ipv4Cidr allowed_clients;

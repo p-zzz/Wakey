@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 #include <set>
+#include <sys/stat.h>
 
 namespace gw {
 
@@ -76,6 +77,28 @@ void check_bind_address(const std::string& text, const Ipv4Cidr& clients) {
     }
 }
 
+std::string read_key_file(const std::string& path) {
+    struct stat st{};
+    if (stat(path.c_str(), &st) != 0) {
+        throw std::runtime_error(path + " : file doesn't exist or can't be accessed");
+    }
+    if (st.st_mode & (S_IRWXG | S_IRWXO)) {
+        throw std::runtime_error("access refused; to make your key private run: chmod 600 <path>");
+    }
+
+    std::ifstream in(path);
+    if (!in) {
+        throw std::runtime_error("error opening file " + path);
+    }
+    std::string key;
+    std::getline(in, key);
+    if (key.size() < 32) {
+        throw std::runtime_error(path + " file is empty or invalid key");
+    }
+
+    return key;
+}
+
 }   // namespace
 
 Config load_config(const std::string &path){
@@ -86,7 +109,13 @@ Config load_config(const std::string &path){
     }
     const json j = json::parse(in);
 
+    // Check keys ----------------------------------
+
     Config conf;
+
+    conf.api_key = read_key_file(j.at("api_key_file").get<std::string>());
+    conf.admin_key = read_key_file(j.at("admin_key_file").get<std::string>());
+
     conf.bind_address = j.at("bind_address").get<std::string>();
 
     conf.port = j.at("port").get<int>();
@@ -123,4 +152,5 @@ Config load_config(const std::string &path){
 
     return conf;
     }
-}
+
+}   // gw namespace
