@@ -1,8 +1,10 @@
 #include "config.hpp"
 #include "health.hpp"
+#include "net_guard.hpp"
 #include <chrono>
 #include <httplib.h>
 #include <iostream>
+#include <optional>
 #include <string>
 #include <nlohmann/json.hpp>
 #include <map>
@@ -88,6 +90,16 @@ int main(int argc, char** argv){
     httplib::Server svr;
 
     const ModelTable models = build_model_table(conf.backends);
+
+    svr.set_pre_routing_handler([&](const httplib::Request& req, httplib::Response& res) {
+        std::optional<std::uint32_t> client_ip = gw::parse_ipv4(req.remote_addr);
+        if (!client_ip || !conf.allowed_clients.contains(*client_ip)) {
+            send_error(res, 403, "Forbidden: unknown IP address");
+            std::cerr << "rejected client " << req.remote_addr << '\n';
+            return httplib::Server::HandlerResponse::Handled;
+        }
+        return httplib::Server::HandlerResponse::Unhandled;
+    });
 
     svr.Get("/health", [](const httplib::Request&, httplib::Response& res) {
         res.set_content(R"({"status":"ok"})", "application/json");
