@@ -109,7 +109,7 @@ Config load_config(const std::string &path){
     }
     const json j = json::parse(in);
 
-    // Check keys ----------------------------------
+    // Check keys
 
     Config conf;
 
@@ -124,12 +124,15 @@ Config load_config(const std::string &path){
     }
 
     std::string allowed_clients = j.at("allowed_clients").get<std::string>();
-
-    // checks
     conf.allowed_clients = check_allowed_clients(allowed_clients);
     check_bind_address(conf.bind_address, conf.allowed_clients);
 
     conf.default_model = j.at("default_model").get<std::string>();
+
+    conf.timeout_s = j.at("timeout_s").get<int>();
+    if (conf.timeout_s < 1 || conf.timeout_s > 420) {
+        throw::std::runtime_error("timeout negative or too long");
+    }
 
     for (const json& jb : j.at("backends")) {
         conf.backends.push_back(parse_backend(jb));

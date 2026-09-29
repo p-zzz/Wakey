@@ -2,6 +2,7 @@
 #include "health.hpp"
 #include "net_guard.hpp"
 #include "auth.hpp"
+#include "wol.hpp"
 #include <chrono>
 #include <httplib.h>
 #include <iostream>
@@ -37,6 +38,13 @@ namespace {
             }
         }
         return table;
+    }
+
+    const gw::Backend* find_backend(const std::vector<gw::Backend>& backends, const std::string& name) {
+        for (const gw::Backend& b : backends) {
+            if (b.name == name) return &b;
+        }
+        return nullptr;
     }
 
     void handle_chat(const ModelTable models, const std::string& default_model,
@@ -127,7 +135,7 @@ int main(int argc, char** argv){
     });
 
     svr.Get("/health", [](const httplib::Request&, httplib::Response& res) {
-        res.set_content(R"({"status":"ok"})", "application/json");
+        res.set_content(json{{"status", "ok"}}.dump(), "application/json");
     });
 
     svr.Get("/admin/status", [&](const httplib::Request&, httplib::Response& res) {
@@ -140,7 +148,43 @@ int main(int argc, char** argv){
                 {"can_wake", b.wake.has_value()},
             });
         }
-        res.set_content(json{{"backends", list}}.dump(), "application.json");
+        res.set_content(json{{"backends", list}}.dump(), "application/json");
+    });
+
+    svr.Post(R"(/admin/([A-Za-z0-9_-]+)/wake)", [&](const httplib::Request& req, httplib::Response& res) {
+        const std::string name = req.matches[1];
+        const auto b = find_backend(conf.backends, name);
+        // 404 not found
+        if (b == nullptr){
+            send_error(res, 404, "backend not found");
+            std::cerr << "backend not found at " << req.path << '\n';
+        }
+        // 400 no wake config
+        if (!b->wake) {
+            send_error(res, 400, "backend '" + name + "' cannot be woken");
+            std::cerr << "backend '" << name << "' has no wake config" << '\n';
+        }
+        // 200 already healthy
+        if (gw::is_healthy(b->host, b->port)) {
+            res.status = 200;
+            res.set_content(json{{"status", "already up"}}.dump(), "application/json");
+        }
+        // Stopwatch, 500 on failure
+        const auto start_time = std::chrono::steady_clock::now();
+        if (!gw::send_magic_packet(b->wake->mac, b->wake->broadcast)) {
+            send_error(res, 500, "error sending magic packet");
+            std::cerr << "error sending magic packet to backend " << name << '\n';
+        }
+        const bool up = gw::wait_until_healthy(b->host, b->port, std::chrono::seconds(conf.timeout_s));
+        const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time).count();
+        const double elapsed_rounded = std::round(elapsed * 10) / 10;
+        if (up) {
+            res.status = 200;
+            res.set_content(json{{"status", "up"}, {"seconds", elapsed_rounded}}.dump(), "application/json");
+        }
+        send_error(res, 504, "timed out");
+        std::cerr << "backend '" << name << "' timed out after " << elapsed_rounded << "seconds\n";
+        res.set_content(json{{"status", "timeout"}, {"seconds", elapsed_rounded}}.dump(), "application/json");
     });
 
     svr.Post("/v1/chat/completions", [&](const httplib::Request &req, httplib::Response &res) {

@@ -66,7 +66,6 @@ namespace gw {
             return false;
         }
 
-        /*fill in struct */
         sockaddr_in addr{};
         addr.sin_family = AF_INET;
         addr.sin_port = htons(9);
@@ -75,7 +74,7 @@ namespace gw {
             std::cerr << "invalid broadcast address\n";
             return false;
         }
-        /*sendto */
+        // sendto
         if (sendto(sock.fd, p.data(), p.size(), 0, reinterpret_cast<sockaddr*>(&addr), sizeof addr) < 0) {
             perror("sendto");
             return false;

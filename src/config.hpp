@@ -25,6 +25,7 @@ struct Config {
     std::string admin_key;
     std::string bind_address;
     int port;
+    int timeout_s;
     Ipv4Cidr allowed_clients;
     std::string default_model;
     std::vector<Backend> backends;

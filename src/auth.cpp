@@ -1,5 +1,4 @@
 #include "auth.hpp"
-#include "httplib.h"
 
 namespace gw {
 
