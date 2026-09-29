@@ -23,6 +23,12 @@ namespace {
         res.set_content(json{{"error", message}}.dump(), "application/json");
     }
 
+    bool has_bearer_key(const httplib::Request& req, const std::string& key) {
+        const std::string header = req.get_header_value("Authorization");
+        return header.starts_with("Bearer ") &&
+            gw::constant_time_equal(header.substr(7), key);
+    }
+
     ModelTable build_model_table(const std::vector<gw::Backend>& backends) {
         ModelTable table;
         for (const gw::Backend& b : backends) {
@@ -100,14 +106,19 @@ int main(int argc, char** argv){
             std::cerr << "rejected client " << req.remote_addr << '\n';
             return httplib::Server::HandlerResponse::Handled;
         }
-        // Check API key
+        // Check keys
         if (req.path.starts_with("/v1/")) {
-            const std::string header = req.get_header_value("Authorization");
-            const bool authorized = header.starts_with("Bearer ") &&
-                gw::constant_time_equal(header.substr(7), conf.api_key);
-            if (!authorized){
+            if (!has_bearer_key(req, conf.api_key)){
                 res.set_header("WWW-Authenticate", "Bearer");
                 send_error(res, 401, "missing or invalid API key");
+                std::cerr << "unauthorized request from " << req.remote_addr << " to " << req.path << '\n';
+                return httplib::Server::HandlerResponse::Handled;
+            }
+        }
+        if (req.path.starts_with("/admin/")) {
+            if (!has_bearer_key(req, conf.admin_key)) {
+                res.set_header("WWW-Authenticate", "Bearer");
+                send_error(res, 401, "missing or invalid admin key");
                 std::cerr << "unauthorized request from " << req.remote_addr << " to " << req.path << '\n';
                 return httplib::Server::HandlerResponse::Handled;
             }
@@ -117,6 +128,19 @@ int main(int argc, char** argv){
 
     svr.Get("/health", [](const httplib::Request&, httplib::Response& res) {
         res.set_content(R"({"status":"ok"})", "application/json");
+    });
+
+    svr.Get("/admin/status", [&](const httplib::Request&, httplib::Response& res) {
+        json list = json::array();
+        for (const gw::Backend& b : conf.backends) {
+            list.push_back({
+                {"name", b.name},
+                {"models", b.models},
+                {"up", gw::is_healthy(b.host, b.port)},
+                {"can_wake", b.wake.has_value()},
+            });
+        }
+        res.set_content(json{{"backends", list}}.dump(), "application.json");
     });
 
     svr.Post("/v1/chat/completions", [&](const httplib::Request &req, httplib::Response &res) {

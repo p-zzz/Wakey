@@ -1,8 +1,9 @@
 #include "auth.hpp"
+#include "httplib.h"
 
 namespace gw {
 
-bool constant_time_equal(const std::string& a, const std::string& b){
+bool constant_time_equal(const std::string& a, const std::string& b) {
     if (!(a.size() == b.size())) return false;
 
     int diff = 0;
