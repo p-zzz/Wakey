@@ -1,0 +1,4 @@
+# Install on the PC as /etc/sudoers.d/wakey:
+#   sudo install -o root -g root -m 440 sudoers-wakey /etc/sudoers.d/wakey
+#   sudo visudo -c        # syntax check
+YOUR_USER ALL=(root) NOPASSWD: /usr/bin/systemctl start llama-server, /usr/bin/systemctl stop llama-server, /usr/bin/systemctl poweroff

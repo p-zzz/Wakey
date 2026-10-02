@@ -1,0 +1,17 @@
+#!/bin/bash
+
+case "$SSH_ORIGINAL_COMMAND" in
+  start)
+    sudo -n /usr/bin/systemctl start llama-server
+    ;;
+  stop)
+    sudo -n /usr/bin/systemctl stop llama-server
+    ;;
+  poweroff)
+    sudo -n /usr/bin/systemctl poweroff
+    ;;
+  *)
+    echo "Usage: start | stop | poweroff" >&2
+    exit 1
+    ;;
+esac
