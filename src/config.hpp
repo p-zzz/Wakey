@@ -10,6 +10,7 @@ namespace gw {
 struct WakeConfig {
     gw::MacAddress mac;
     std::string broadcast;
+    int timeout_s = 240;
 };
 
 struct Backend {
@@ -25,7 +26,6 @@ struct Config {
     std::string admin_key;
     std::string bind_address;
     int port;
-    int timeout_s;
     Ipv4Cidr allowed_clients;
     std::string default_model;
     std::vector<Backend> backends;

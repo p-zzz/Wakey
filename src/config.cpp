@@ -42,7 +42,12 @@ Backend parse_backend(const json& jb) {
         w.broadcast = jw.at("broadcast").get<std::string>();
         std::optional<std::uint32_t> broadcast = parse_ipv4(w.broadcast);
         if (!broadcast) {
-            throw std::runtime_error("backend'" + b.name + "': invalid wake.broadcast: " + w.broadcast);
+            throw std::runtime_error("backend '" + b.name + "': invalid wake.broadcast: " + w.broadcast);
+        }
+        // timeout
+        w.timeout_s = jw.value("timeout_s", 240);
+        if (w.timeout_s <= 0) {
+            throw std::runtime_error("backend'" + b.name + "': timeout must be a positive value");
         }
 
         b.wake = w;
@@ -128,11 +133,6 @@ Config load_config(const std::string &path){
     check_bind_address(conf.bind_address, conf.allowed_clients);
 
     conf.default_model = j.at("default_model").get<std::string>();
-
-    conf.timeout_s = j.at("timeout_s").get<int>();
-    if (conf.timeout_s < 1 || conf.timeout_s > 420) {
-        throw::std::runtime_error("timeout negative or too long");
-    }
 
     for (const json& jb : j.at("backends")) {
         conf.backends.push_back(parse_backend(jb));
