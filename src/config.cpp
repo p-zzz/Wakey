@@ -17,6 +17,33 @@ namespace {
 
 using json = nlohmann::json;
 
+void check_private_file(const std::string& path) {
+    struct stat st{};
+    if (stat(path.c_str(), &st) != 0) {
+        throw std::runtime_error(path + " : file doesn't exist or can't be accessed");
+    }
+    if (st.st_mode & (S_IRWXG | S_IRWXO)) {
+        throw std::runtime_error("access refused; to make your key private run: chmod 600 <path>");
+    }
+}
+
+std::string read_key_file(const std::string& path) {
+
+    check_private_file(path);
+
+    std::ifstream in(path);
+    if (!in) {
+        throw std::runtime_error("error opening file " + path);
+    }
+    std::string key;
+    std::getline(in, key);
+    if (key.size() < 32) {
+        throw std::runtime_error(path + " file is empty or invalid key");
+    }
+
+    return key;
+}
+
 Backend parse_backend(const json& jb) {
     Backend b;
     b.name = jb.at("name").get<std::string>();
@@ -47,11 +74,28 @@ Backend parse_backend(const json& jb) {
         // timeout
         w.timeout_s = jw.value("timeout_s", 240);
         if (w.timeout_s <= 0) {
-            throw std::runtime_error("backend'" + b.name + "': timeout must be a positive value");
+            throw std::runtime_error("backend '" + b.name + "': timeout must be a positive value");
         }
 
         b.wake = w;
     }
+
+    if (jb.contains("ssh")) {
+        const json& js = jb.at("ssh");
+        SshConfig s;
+
+        s.user = js.at("user").get<std::string>();
+        // user must not be empty or start with '-'
+        if (s.user.empty() || s.user.starts_with('-')) {
+            throw std::runtime_error("backend '" + b.name + "': invalid ssh.user");
+        }
+
+        s.key_file = js.at("key_file").get<std::string>();
+        check_private_file(s.key_file);
+
+        b.ssh = s;
+    }
+
     return b;
 }
 
@@ -82,34 +126,12 @@ void check_bind_address(const std::string& text, const Ipv4Cidr& clients) {
     }
 }
 
-std::string read_key_file(const std::string& path) {
-    struct stat st{};
-    if (stat(path.c_str(), &st) != 0) {
-        throw std::runtime_error(path + " : file doesn't exist or can't be accessed");
-    }
-    if (st.st_mode & (S_IRWXG | S_IRWXO)) {
-        throw std::runtime_error("access refused; to make your key private run: chmod 600 <path>");
-    }
-
-    std::ifstream in(path);
-    if (!in) {
-        throw std::runtime_error("error opening file " + path);
-    }
-    std::string key;
-    std::getline(in, key);
-    if (key.size() < 32) {
-        throw std::runtime_error(path + " file is empty or invalid key");
-    }
-
-    return key;
-}
 
 }   // namespace
 
 Config load_config(const std::string &path){
     std::ifstream in(path);
     if (!in) {
-        //throw error
         throw std::runtime_error("cannot open config file " + path);
     }
     const json j = json::parse(in);

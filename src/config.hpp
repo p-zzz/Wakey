@@ -13,12 +13,18 @@ struct WakeConfig {
     int timeout_s = 240;
 };
 
+struct SshConfig {
+    std::string user;
+    std::string key_file;
+};
+
 struct Backend {
     std::string name;
     std::string host;
     int port;
     std::vector<std::string> models;
     std::optional<WakeConfig> wake;
+    std::optional<SshConfig> ssh;
 };
 
 struct Config {

@@ -238,6 +238,7 @@ int main(int argc, char** argv){
                 {"models", b.models},
                 {"up", gw::is_healthy(b.host, b.port)},
                 {"can_wake", b.wake.has_value()},
+                {"can_control", b.ssh.has_value()},
                 {"in_flight", states.at(b.name).in_flight.load()},
                 {"power_op", states.at(b.name).power_op.load()},
             });
