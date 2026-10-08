@@ -3,6 +3,8 @@
 #include "net_guard.hpp"
 #include "auth.hpp"
 #include "wol.hpp"
+#include "power.hpp"
+
 #include <chrono>
 #include <httplib.h>
 #include <iostream>
@@ -173,6 +175,61 @@ namespace {
         std::cerr << "backend '" << name << "' timed out after " << elapsed_rounded << "seconds\n";
         return send_error(res, 504, "timed out");
     }
+
+
+    void handle_power_action(const std::vector<gw::Backend>& backends, const httplib::Request& req,
+                            httplib::Response& res, std::map<std::string, BackendState>& states,
+                            const std::string& action) {
+        const std::string name = req.matches[1];
+        const auto b = find_backend(backends, name);
+        if (b == nullptr){
+            return send_error(res, 404, "backend not found");
+        }
+
+        BackendState& state = states.at(b->name);
+
+        if (!b->ssh) {
+            return send_error(res, 400, "backend '" + name + "' has no ssh config");
+        }
+
+        if (state.power_op.exchange(true)) {
+            return send_error(res, 409, "a power operation is already in progress on '" + name + "'");
+        }
+        FlagGuard clear_on_exit(state.power_op);
+
+        // check if in_flight
+        const int running = state.in_flight.load();
+        if (running > 0) {
+            return send_error(res, 409, std::to_string(running) + " request(s) still running on '" + name + "'");
+        }
+
+        std::cerr << "power action '" << action << "' on '" << name << "'\n";
+        const int rc = gw::run_remote(b->ssh->user, b->host, b->ssh->key_file, action);
+        switch (rc) {
+            case 0:
+                if (action == "poweroff") {
+                    std::cerr << "result code '" << rc << "' on '" << name << "'\n";
+                    res.status = 202;
+                    res.set_content(json{{"status", "shutting down"}}.dump(), "application/json");
+                } else {
+                    std::cerr << "result code '" << rc << "' on '" << name << "'\n";
+                    res.status = 200;
+                    res.set_content(json{{"status", "stopped"}}.dump(), "application/json");
+                }
+                return;
+            case 1:
+                std::cerr << "result code '" << rc << "' on '" << name << "'\n";
+                return send_error(res, 500, "remote refused the command (config and PC don't match)");
+            case 255:
+                std::cerr << "result code '" << rc << "' on '" << name << "'\n";
+                return send_error(res, 502, "could not reach backend over ssh");
+            default:
+                std::cerr << "result code '" << rc << "' on '" << name << "'\n";
+                return send_error(res, 500, "failed to run ssh");
+        }
+
+    }
+
 }
 
 int main(int argc, char** argv){
@@ -250,6 +307,13 @@ int main(int argc, char** argv){
         handle_wake(conf.backends, req, res, states);
     });
 
+    svr.Post(R"(/admin/([A-Za-z0-9_-]+)/stop)", [&](const httplib::Request& req, httplib::Response& res) {
+        handle_power_action(conf.backends, req, res, states, "stop");
+    });
+
+    svr.Post(R"(/admin/([A-Za-z0-9_-]+)/poweroff)", [&](const httplib::Request& req, httplib::Response& res) {
+        handle_power_action(conf.backends, req, res, states, "poweroff");
+    });
 
     svr.Post("/v1/chat/completions", [&](const httplib::Request &req, httplib::Response &res) {
         handle_chat(models, conf.default_model, req, res, states);
