@@ -13,6 +13,7 @@
 #include <nlohmann/json.hpp>
 #include <map>
 #include <atomic>
+#include <thread>
 
 
 
@@ -80,6 +81,19 @@ namespace {
     }
 
 
+    // Retries "start" over ssh until it succeeds, fails permanently, or the deadline passes.
+    // Returns the last run_remote result: 0 = started, 255 = deadline reached, else = permanent error.
+    // Requires b.ssh
+    int start_over_ssh(const gw::Backend& b, std::chrono::steady_clock::time_point deadline) {
+        while (true) {
+            const int rc = gw::run_remote(b.ssh->user, b.host, b.ssh->key_file, "start");
+            if (rc != 255) return rc;                                   // 0 = started, else = permanent
+            if (std::chrono::steady_clock::now() >= deadline) return 255;  // gave up
+            std::this_thread::sleep_for(std::chrono::seconds(2));
+        }
+    }
+
+
     void handle_chat(const ModelTable models, const std::string& default_model,
                     const httplib::Request& req, httplib::Response& res,
                     std::map<std::string, BackendState>& states) {
@@ -133,6 +147,10 @@ namespace {
     }
 
 
+    auto secs = [](std::chrono::steady_clock::duration d) {
+        return std::round(std::chrono::duration<double>(d).count() * 10) / 10;
+    };
+
 
     void handle_wake(const std::vector<gw::Backend>& backends, const httplib::Request& req,
                     httplib::Response& res, std::map<std::string, BackendState>& states) {
@@ -159,21 +177,39 @@ namespace {
             return send_error(res, 409, "a power operation is already in progress on '" + name + "'");
         }
         FlagGuard clear_on_exit(states.at(b->name).power_op);
-        // Stopwatch, 500 on failure
+
         const auto start_time = std::chrono::steady_clock::now();
+        const auto deadline = start_time + std::chrono::seconds(b->wake->timeout_s);
+
         if (!gw::send_magic_packet(b->wake->mac, b->wake->broadcast)) {
             std::cerr << "error sending magic packet to backend " << name << '\n';
             return send_error(res, 500, "error sending magic packet");
         }
-        const bool up = gw::wait_until_healthy(b->host, b->port, std::chrono::seconds(b->wake->timeout_s));
-        const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time).count();
-        const double elapsed_rounded = std::round(elapsed * 10) / 10;
-        if (up) {
-            res.set_content(json{{"status", "up"}, {"seconds", elapsed_rounded}}.dump(), "application/json");
-            return;
+
+        auto boot_done = start_time;
+        if (b->ssh) {
+            const int rc = start_over_ssh(*b, deadline);
+
+            if (rc == 255) return send_error(res, 504, "timed out (phase: boot)");
+            if (rc != 0) return send_error(res, 500, "dispatcher refused or ssh missing");
+
+            boot_done = std::chrono::steady_clock::now();
         }
-        std::cerr << "backend '" << name << "' timed out after " << elapsed_rounded << "seconds\n";
-        return send_error(res, 504, "timed out");
+        const auto remaining = std::chrono::duration_cast<std::chrono::seconds>(deadline - std::chrono::steady_clock::now());
+        if (remaining <= std::chrono::seconds(0)) {
+            return send_error(res, 504, "boot took too long (phase: boot)");
+        }
+
+        if (!gw::wait_until_healthy(b->host, b->port, remaining)) {
+            std::cerr << "backend '" << name << "' timed out (phase: load)\n";
+            return send_error(res, 504, "timed out (phase: load)");
+        }
+        const auto ready = std::chrono::steady_clock::now();
+
+        return res.set_content(json{{"status", "up"},
+        {"boot_s",  secs(boot_done - start_time)},
+        {"load_s",  secs(ready - boot_done)},
+        {"total_s", secs(ready - start_time)}}.dump(), "application/json");
     }
 
 
