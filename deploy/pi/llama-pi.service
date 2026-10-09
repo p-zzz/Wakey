@@ -1,0 +1,14 @@
+[Unit]
+Description=llama-cpp server (Qwen 3 1.7b) for Wakey
+PartOf=wakey.service
+RestartSec=5
+
+[Service]
+ExecStart=%h/llama.cpp/build/bin/llama-server \
+    -m /srv/models/qwen3-1.7b/Qwen3-1.7B-Q4_K_M.gguf \
+    -t 4 \
+    -c 8192 \
+    --host 127.0.0.1 \
+    --port 8095 \
+    --no-webui
+Restart=on-failure

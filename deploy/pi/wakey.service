@@ -1,0 +1,9 @@
+[Unit]
+Description=Wakey LLM gateway
+Wants=llama-pi.service
+
+[Service]
+WorkingDirectory=%h/wakey/Wakey
+ExecStart=%h/wakey/Wakey/build/wakey %h/wakey/Wakey/config.json
+Restart=on-failure
+RestartSec=5
