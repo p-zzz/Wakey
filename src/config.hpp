@@ -38,5 +38,4 @@ struct Config {
 };
 
 Config load_config(const std::string& path);
-
 }
