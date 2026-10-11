@@ -28,6 +28,9 @@ add_test(NAME net_guard COMMAND test_net_guard)
 add_library(json INTERFACE)
 target_include_directories(json INTERFACE third_party)
 
+add_executable(wakeyctl tools/wakeyctl.cpp)
+target_link_libraries(wakeyctl PRIVATE gateway_core httplib json)
+
 add_executable(wakey src/gateway.cpp)
 target_link_libraries(wakey PRIVATE gateway_core httplib json)
 target_compile_options(wakey PRIVATE -Wall -Wextra)

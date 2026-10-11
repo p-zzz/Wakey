@@ -1,0 +1,5 @@
+{ "url": "http://<wakey-wireguard-ip>:8100",
+  "api_key_file": "~/.config/wakey/api.key",
+  "admin_key_file": "~/.config/wakey/admin.key",
+  "default_model": "qwen3-1.7b"
+}

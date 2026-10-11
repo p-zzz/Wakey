@@ -1,4 +1,6 @@
 build/
 .cache/
 config.json
+client.json
 keys/
+Testing/
