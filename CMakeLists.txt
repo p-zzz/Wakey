@@ -28,8 +28,12 @@ add_test(NAME net_guard COMMAND test_net_guard)
 add_library(json INTERFACE)
 target_include_directories(json INTERFACE third_party)
 
+# replxx: line editing for `wakeyctl chat` (vendored, BSD licence)
+add_subdirectory(third_party/replxx EXCLUDE_FROM_ALL)
+
 add_executable(wakeyctl tools/wakeyctl.cpp)
-target_link_libraries(wakeyctl PRIVATE gateway_core httplib json)
+target_link_libraries(wakeyctl PRIVATE gateway_core httplib json replxx::replxx)
+target_compile_options(wakeyctl PRIVATE -Wall -Wextra)
 
 add_executable(wakey src/gateway.cpp)
 target_link_libraries(wakey PRIVATE gateway_core httplib json)
