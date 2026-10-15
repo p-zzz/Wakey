@@ -14,7 +14,7 @@ fi
 body='{"model":"'"$model"'","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}'
 
 one_request() {
-    curl -s -o /dev/null -w '%{http_code} %{time_total}\n' "${auth[@]}" -H 'Content-Type: application/json' -d "$body" "$url/v1/chat/complet>
+    curl -s -o /dev/null -w '%{http_code} %{time_total}\n' "${auth[@]}" -H 'Content-Type: application/json' -d "$body" "$url/v1/chat/completions"
 }
 
 read -r code _ < <(one_request)
