@@ -326,15 +326,20 @@ int main(int argc, char** argv){
     svr.Get("/admin/status", [&](const httplib::Request&, httplib::Response& res) {
         json list = json::array();
         for (const gw::Backend& b : conf.backends) {
-            list.push_back({
+            const bool up = gw::is_healthy(b.host, b.port);
+            json entry = {
                 {"name", b.name},
                 {"models", b.models},
-                {"up", gw::is_healthy(b.host, b.port)},
+                {"up", up},
                 {"can_wake", b.wake.has_value()},
                 {"can_control", b.ssh.has_value()},
                 {"in_flight", states.at(b.name).in_flight.load()},
-                {"power_op", states.at(b.name).power_op.load()},
-            });
+                {"power_op", states.at(b.name).power_op.load()}
+            };
+            if (up) {
+                if (const auto n = gw::fetch_n_ctx(b.host, b.port)) entry["n_ctx"] = *n;
+            }
+            list.push_back(entry);
         }
         res.set_content(json{{"backends", list}}.dump(), "application/json");
     });
