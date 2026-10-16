@@ -1,21 +1,24 @@
 {
-  "bind_address": "127.0.0.1",
+  "bind_address": "10.0.0.1",
   "port": 8100,
-  "allowed_clients": "127.0.0.1/8",
-  "default_model": "model-name",
+  "allowed_clients": "10.0.0.0/24",
+  "api_key_file": "keys/api.key",
+  "admin_key_file": "keys/admin.key",
+  "default_model": "qwen3-1.7b",
   "backends": [
     {
       "name": "pi",
-      "host": "localhost",
-      "port": 8080,
-      "models": ["model-name"]
+      "host": "127.0.0.1",
+      "port": 8095,
+      "models": ["qwen3-1.7b"]
     },
     {
       "name": "pc",
-      "host": "local-ip-address",
-      "port": 8080,
-      "models": ["model-name"],
-      "wake": { "mac": "AA:BB:CC:DD:EE:FF", "broadcast": "192.168.x.255" }
+      "host": "192.168.1.50",
+      "port": 8095,
+      "models": ["gemma-4-12b"],
+      "wake": { "mac": "AA:BB:CC:DD:EE:FF", "broadcast": "192.168.1.255", "timeout_s": 240 },
+      "ssh": { "user": "your-pc-user", "key_file": "/home/pi/.ssh/wakey_pc" }
     }
   ]
 }

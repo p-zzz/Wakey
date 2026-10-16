@@ -1,0 +1,118 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 450" width="1000" height="450" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <title>Wakey architecture</title>
+  <style>
+    .bg      { fill: #ffffff; stroke: #d0d7de; }
+    .group   { fill: #f6f8fa; stroke: #d0d7de; }
+    .box     { fill: #ffffff; stroke: #8c959f; }
+    .accent  { fill: #ddf4ff; stroke: #0969da; }
+    .title   { fill: #1f2328; font-size: 15px; font-weight: 600; }
+    .sub     { fill: #59636e; font-size: 12.5px; }
+    .gtitle  { fill: #1f2328; font-size: 13px; font-weight: 600; letter-spacing: .02em; }
+    .gsub    { fill: #59636e; font-size: 12px; }
+    .label   { fill: #59636e; font-size: 12px; }
+    .pill    { fill: #ffffff; }
+    .line    { stroke: #59636e; stroke-width: 1.6; fill: none; }
+    .vpn     { stroke: #1a7f37; stroke-width: 2.2; fill: none; }
+    .vpntext { fill: #1a7f37; font-size: 12px; font-weight: 600; }
+    .head    { fill: #59636e; }
+    .vpnhead { fill: #1a7f37; }
+    .tag     { fill: #fff8c5; stroke: #d4a72c; }
+    .tagtext { fill: #7d4e00; font-size: 11px; font-weight: 600; }
+    .foot    { fill: #59636e; font-size: 12px; }
+    @media (prefers-color-scheme: dark) {
+      .bg      { fill: #0d1117; stroke: #30363d; }
+      .group   { fill: #161b22; stroke: #30363d; }
+      .box     { fill: #0d1117; stroke: #6e7681; }
+      .accent  { fill: #0c2d6b; stroke: #4493f8; }
+      .title, .gtitle { fill: #e6edf3; }
+      .sub, .gsub, .label, .foot { fill: #9198a1; }
+      .pill    { fill: #0d1117; }
+      .line    { stroke: #9198a1; }
+      .head    { fill: #9198a1; }
+      .vpn     { stroke: #3fb950; }
+      .vpntext { fill: #3fb950; }
+      .vpnhead { fill: #3fb950; }
+      .tag     { fill: #3b2e00; stroke: #9e6a03; }
+      .tagtext { fill: #e3b341; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" class="head"/>
+    </marker>
+    <marker id="arrow-vpn" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" class="vpnhead"/>
+    </marker>
+  </defs>
+
+  <!-- canvas -->
+  <rect class="bg" x="0.5" y="0.5" width="999" height="449" rx="12"/>
+
+  <!-- ===== Laptop ===== -->
+  <rect class="box" x="24" y="183" width="148" height="66" rx="8"/>
+  <text class="title" x="98" y="210" text-anchor="middle">Laptop</text>
+  <text class="sub" x="98" y="230" text-anchor="middle">wakeyctl · any</text>
+  <text class="sub" x="98" y="244" text-anchor="middle">OpenAI client</text>
+
+  <!-- ===== Raspberry Pi group ===== -->
+  <rect class="group" x="292" y="56" width="262" height="336" rx="12"/>
+  <text class="gtitle" x="312" y="84">RASPBERRY PI 5</text>
+  <text class="gsub" x="312" y="102">always on · ~5 W</text>
+
+  <rect class="accent" x="316" y="172" width="214" height="84" rx="8"/>
+  <text class="title" x="423" y="202" text-anchor="middle">Wakey gateway</text>
+  <text class="sub" x="423" y="222" text-anchor="middle">C++ · port 8100</text>
+  <text class="sub" x="423" y="239" text-anchor="middle">IP allowlist · keys · routing</text>
+
+  <rect class="box" x="316" y="300" width="214" height="66" rx="8"/>
+  <text class="title" x="423" y="327" text-anchor="middle">llama-server</text>
+  <text class="sub" x="423" y="347" text-anchor="middle">Qwen3-1.7B · CPU</text>
+
+  <!-- ===== Gaming PC group (dashed: off until woken) ===== -->
+  <rect class="group" x="702" y="56" width="274" height="336" rx="12" stroke-dasharray="6 5"/>
+  <text class="gtitle" x="722" y="84">GAMING PC</text>
+  <text class="gsub" x="722" y="102">RTX 3080 Ti</text>
+  <rect class="tag" x="846" y="70" width="114" height="22" rx="11"/>
+  <text class="tagtext" x="903" y="85" text-anchor="middle">off until woken</text>
+
+  <rect class="box" x="726" y="124" width="226" height="66" rx="8"/>
+  <text class="title" x="839" y="151" text-anchor="middle">wakey-remote</text>
+  <text class="sub" x="839" y="171" text-anchor="middle">SSH forced command</text>
+
+  <rect class="box" x="726" y="300" width="226" height="66" rx="8"/>
+  <text class="title" x="839" y="327" text-anchor="middle">llama-server</text>
+  <text class="sub" x="839" y="347" text-anchor="middle">Gemma 4 12B · GPU</text>
+
+  <!-- ===== Arrows ===== -->
+  <!-- Laptop → Wakey over WireGuard -->
+  <path class="vpn" d="M172,216 H314" marker-end="url(#arrow-vpn)"/>
+  <text class="vpntext" x="243" y="204" text-anchor="middle">WireGuard</text>
+  <text class="label" x="243" y="236" text-anchor="middle">HTTP + Bearer key</text>
+
+  <!-- Wakey → Qwen -->
+  <path class="line" d="M423,256 V298" marker-end="url(#arrow)"/>
+  <text class="label" x="433" y="282">127.0.0.1</text>
+
+  <!-- Wakey → wakey-remote (SSH) -->
+  <path class="line" d="M530,186 H600 V157 H724" marker-end="url(#arrow)"/>
+  <rect class="pill" x="606" y="124" width="92" height="22" rx="4"/>
+  <text class="label" x="652" y="139" text-anchor="middle">② SSH</text>
+  <text class="label" x="652" y="176" text-anchor="middle">start · stop · off</text>
+
+  <!-- Wakey → PC (Wake-on-LAN) -->
+  <path class="line" d="M530,214 H700" marker-end="url(#arrow)" stroke-dasharray="5 4"/>
+  <rect class="pill" x="590" y="223" width="104" height="20" rx="4"/>
+  <text class="label" x="642" y="237" text-anchor="middle">① Wake-on-LAN</text>
+
+  <!-- wakey-remote → Gemma (sudo systemctl) -->
+  <path class="line" d="M839,190 V298" marker-end="url(#arrow)"/>
+  <text class="label" x="849" y="242">sudo systemctl</text>
+  <text class="label" x="849" y="258">start llama-server</text>
+
+  <!-- Wakey → Gemma (HTTP over LAN) -->
+  <path class="line" d="M530,242 H600 V333 H724" marker-end="url(#arrow)"/>
+  <text class="label" x="662" y="324" text-anchor="middle">③ HTTP (LAN)</text>
+
+  <!-- footer -->
+  <text class="foot" x="500" y="425" text-anchor="middle">Only WireGuard's UDP port faces the internet. Wakey binds to the VPN address and is never exposed directly.</text>
+</svg>
