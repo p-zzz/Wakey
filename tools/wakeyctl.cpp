@@ -271,14 +271,14 @@ StreamResult stream_chat(httplib::Client& cli, const gw::ClientConfig& conf,
                 if (j.is_discarded()) continue;
                 if (j.contains("choices") && !j.at("choices").empty()) {
                     const json& delta = j.at("choices").at(0).at("delta");
-                    if (delta.contains("content")) {
+                    if (delta.contains("content") && delta.at("content").is_string()) {
                         if (in_reasoning) { std::cout << '\n'; in_reasoning = false; }
                         const std::string piece = delta.at("content").get<std::string>();
                         gate.begin_output();
                         std::cout << piece << std::flush;
                         result.reply.append(piece);
                     }
-                    if (delta.contains("reasoning_content")) {
+                    if (delta.contains("reasoning_content") && delta.at("reasoning_content").is_string()) {
                         in_reasoning = true;
                         gate.begin_output();
                         std::cout  << out(ansi::dim, delta.at("reasoning_content").get<std::string>()) << std::flush;
