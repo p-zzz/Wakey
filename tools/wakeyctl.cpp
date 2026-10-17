@@ -11,6 +11,7 @@
 
 #include <httplib.h>
 #include <nlohmann/json.hpp>
+#include <ostream>
 #include <replxx.hxx>
 
 #include <algorithm>
@@ -87,7 +88,7 @@ void print_error(const std::string& msg) {
 // ===========================================================================
 
 // While a request is running the terminal is in normal mode, so Ctrl+C sends SIGINT.
-// The handler only sets a flag (the only safe thing to do in a signal handler);
+// The handler only sets a flag;
 // the spinner loop sees it and cancels the request.
 volatile std::sig_atomic_t g_interrupted = 0;
 extern "C" void on_sigint(int) { g_interrupted = 1; }
@@ -96,11 +97,30 @@ struct Cancelled : std::runtime_error {
     Cancelled() : std::runtime_error("cancelled") {}
 };
 
+// Shared between the spinner (main thread) and stream_chat (worker thread).
+// The spinner draws on the current line until the first piece of text is printed;
+// the mutex makes "check + draw" and "switch to text + clear line" impossible to interleave.
+struct OutputGate {
+    std::mutex m;
+    bool streaming = false;
+
+    // stream_chat calls this right before printing a piece of text.
+    // The first call clears the spinner line; later calls are a cheap no-op.
+    void begin_output() {
+        std::lock_guard<std::mutex> lock(m);
+        if (streaming) return;
+        streaming = true;
+        if (isatty(STDERR_FILENO)) std::cerr << "\r\033[K" << std::flush;
+    }
+};
+
 // Runs `work` (which uses `cli`) on a worker thread while the main thread draws a
 // spinner on stderr. Ctrl+C calls cli.stop(), which aborts the HTTP request.
+// With a `gate`, the spinner steps aside as soon as streamed text starts printing.
 // Returns whatever `work` returns, rethrows its exceptions, throws Cancelled on Ctrl+C.
 template <typename F>
-auto with_spinner(const std::string& label, httplib::Client& cli, F work) -> decltype(work()) {
+auto with_spinner(const std::string& label, httplib::Client& cli, F work, OutputGate* gate = nullptr)
+    -> decltype(work()) {
     g_interrupted = 0;
     struct sigaction sa {};
     struct sigaction old {};
@@ -115,19 +135,31 @@ auto with_spinner(const std::string& label, httplib::Client& cli, F work) -> dec
     const auto start = Clock::now();
     bool stopped = false;
 
+    // true once streamed text owns the line (always false without a gate)
+    auto text_started = [&] {
+        if (gate == nullptr) return false;
+        std::lock_guard<std::mutex> lock(gate->m);
+        return gate->streaming;
+    };
+
     for (int i = 0; result.wait_for(std::chrono::milliseconds(100)) != std::future_status::ready; ++i) {
         if (g_interrupted && !stopped) {
             cli.stop();
             stopped = true;
         }
-        if (animate) {
-            const auto secs = std::chrono::duration_cast<std::chrono::seconds>(Clock::now() - start).count();
-            std::cerr << '\r' << err(ansi::cyan, frames[i % 10]) << ' ' << label << "… "
-                      << err(ansi::dim, std::to_string(secs) + "s" + (stopped ? "  cancelling" : "  (Ctrl+C to cancel)"))
-                      << "\033[K" << std::flush;
-        }
+        if (!animate) continue;
+
+        std::unique_lock<std::mutex> lock;
+        if (gate != nullptr) lock = std::unique_lock<std::mutex>(gate->m);   // hold while checking + drawing
+        if (gate != nullptr && gate->streaming) continue;                    // text has the line now
+
+        const auto secs = std::chrono::duration_cast<std::chrono::seconds>(Clock::now() - start).count();
+        std::cerr << '\r' << err(ansi::cyan, frames[i % 10]) << ' ' << label << "… "
+                  << err(ansi::dim, std::to_string(secs) + "s" + (stopped ? "  cancelling" : "  (Ctrl+C to cancel)"))
+                  << "\033[K" << std::flush;
     }
-    if (animate) std::cerr << "\r\033[K" << std::flush;   // erase the spinner line
+    // Erase the spinner line, unless streamed text is on it now (that would wipe the answer).
+    if (animate && !text_started()) std::cerr << "\r\033[K" << std::flush;
     sigaction(SIGINT, &old, nullptr);
 
     if (stopped) {
@@ -152,20 +184,25 @@ httplib::Client make_client(const gw::ClientConfig& conf) {
     return cli;
 }
 
+std::string error_message(int status, const std::string& body) {
+    std::string msg = "HTTP " + std::to_string(status);
+    if (json::accept(body)) {
+        const json j = json::parse(body);
+        if (j.contains("error")) {
+            const json& e = j.at("error");
+            if (e.is_string()) msg += ": " + e.get<std::string>();
+            else if (e.is_object() && e.contains("message")) msg += ": " + e.at("message").get<std::string>();
+        }
+    }
+    return msg;
+}
+
 // Throws with a readable message on connection errors and non-2xx answers.
 // Understands both Wakey's {"error": "..."} and llama-server's {"error": {"message": "..."}}.
 json check_response(httplib::Result& res, const gw::ClientConfig& conf) {
     if (!res) throw std::runtime_error("cannot reach Wakey at " + conf.url + " (is WireGuard up? is Wakey running?)");
     if (res->status < 200 || res->status >= 300) {
-        std::string msg = "HTTP " + std::to_string(res->status);
-        if (json::accept(res->body)) {
-            const json body = json::parse(res->body);
-            if (body.contains("error")) {
-                const json& e = body.at("error");
-                if (e.is_string()) msg += ": " + e.get<std::string>();
-                else if (e.is_object() && e.contains("message")) msg += ": " + e.at("message").get<std::string>();
-            }
-        }
+        std::string msg = error_message(res->status, res->body);
         throw std::runtime_error(msg);
     }
     return json::parse(res->body);
@@ -196,6 +233,72 @@ json send_chat(httplib::Client& cli, const gw::ClientConfig& conf,
     };
     auto res = cli.Post("/v1/chat/completions", auth(conf.api_key), req.dump(), "application/json");
     return check_response(res, conf);
+}
+
+struct StreamResult {
+    std:: string reply;
+    int prompt_tokens = 0;
+    int completion_tokens = 0;
+    double tps = 0;     // from timings, if present
+};
+
+StreamResult stream_chat(httplib::Client& cli, const gw::ClientConfig& conf,
+                        const std::string& model, const json& messages, bool think, OutputGate& gate) {
+    // Append new bytes to a buffer
+    StreamResult result;
+    std::string buffer;
+
+    const json req = {
+        {"model", model},
+        {"messages", messages},
+        {"stream", true},
+        {"stream_options", {{"include_usage", true}}},
+        {"chat_template_kwargs", {{"enable_thinking", think}}}
+    };
+
+    bool in_reasoning = false;
+    auto res = cli.Post("/v1/chat/completions", auth(conf.api_key), req.dump(), "application/json",
+            [&](const char* data, size_t len) {
+        buffer.append(data, len);
+        std::size_t pos;
+        while ((pos = buffer.find("\n\n")) != std::string::npos) {
+            std::string event = buffer.substr(0, pos);
+            buffer.erase(0, pos + 2);
+            if (event.starts_with("data: ")) {
+                event.erase(0, 6);
+                if (event == "[DONE]") break;
+                const json& j = json::parse(event, nullptr, false);
+                if (j.is_discarded()) continue;
+                if (j.contains("choices") && !j.at("choices").empty()) {
+                    const json& delta = j.at("choices").at(0).at("delta");
+                    if (delta.contains("content")) {
+                        if (in_reasoning) { std::cout << '\n'; in_reasoning = false; }
+                        const std::string piece = delta.at("content").get<std::string>();
+                        gate.begin_output();
+                        std::cout << piece << std::flush;
+                        result.reply.append(piece);
+                    }
+                    if (delta.contains("reasoning_content")) {
+                        in_reasoning = true;
+                        gate.begin_output();
+                        std::cout  << out(ansi::dim, delta.at("reasoning_content").get<std::string>()) << std::flush;
+                    }
+                }
+                if (j.contains("usage") && j.at("usage").is_object()) {
+                    result.prompt_tokens = j.at("usage").at("prompt_tokens").get<int>();
+                    result.completion_tokens = j.at("usage").at("completion_tokens").get<int>();
+                }
+                if (j.contains("timings") && j.at("timings").is_object()) {
+                    result.tps = j.at("timings").at("predicted_per_second").get<double>();
+                }
+            }
+        }
+        return true;
+    });
+    if (!res) throw std::runtime_error("cannot reach Wakey at " + conf.url + " (is WireGuard up? is Wakey running?)");
+    if (res->status != 200) throw std::runtime_error(error_message(res->status, buffer));
+    if (result.reply.empty() && !buffer.empty()) throw std::runtime_error(error_message(res->status, buffer));
+    return result;
 }
 
 // ===========================================================================
@@ -596,10 +699,19 @@ void run_turn(const std::string& line, ChatState& st, const gw::ClientConfig& co
     auto cli = make_client(conf);
     const auto start = Clock::now();
     try {
-        const json body = with_spinner(st.think ? "thinking" : "generating", cli,
-                                       [&] { return send_chat(cli, conf, st.model, st.messages, st.think); });
-        const std::string reply = print_reply(body, st.ctx_used, std::chrono::duration<double>(Clock::now() - start).count());
-        st.messages.push_back({{"role", "assistant"}, {"content", reply}});
+        OutputGate gate;
+        const StreamResult r = with_spinner(st.think ? "thinking" : "generating", cli,
+                                       [&] { return stream_chat(cli, conf, st.model, st.messages, st.think, gate); }, &gate);
+        st.ctx_used = r.prompt_tokens + r.completion_tokens;
+        const double seconds = std::chrono::duration<double>(Clock::now() - start).count();
+        std::cout << '\n';
+        std::ostringstream s;
+        s << r.completion_tokens << " tokens";
+        if (r.tps > 0)
+            s << " · " << std::fixed << std::setprecision(0) << r.tps << " t/s";
+        s << " · " << std::fixed << std::setprecision(1) << seconds << " s";
+        std::cerr << err(ansi::dim, s.str()) << '\n';
+        st.messages.push_back({{"role", "assistant"}, {"content", r.reply}});
         if (st.info.n_ctx > 0 && st.ctx_used * 100 / st.info.n_ctx >= 80)
             std::cerr << err(ansi::yellow, "context almost full, /clear to start over") << '\n';
     } catch (...) {
