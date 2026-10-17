@@ -121,7 +121,8 @@ namespace {
         auto guard = std::make_shared<InFlightGuard>(states.at(backend.name).in_flight);
 
         if (states.at(backend.name).power_op.load()) {
-            return send_error(res, 503, "backend '" + backend.name + "' is busy with a power operation, try again later");
+            send_error(res, 503, "backend '" + backend.name + "' is busy with a power operation, try again later");
+            return;
         }
 
         httplib::Client client(backend.host, backend.port);           // create client
@@ -133,16 +134,31 @@ namespace {
             return;
         }
         // forward chunk
-        res.set_chunked_content_provider("text/event-stream",
-            [guard, host = backend.host, port = backend.port, body = req.body](size_t /*offset*/, httplib::DataSink& sink) {
-                httplib::Client client(host, port);
-                client.Post("/v1/chat/completions", httplib::Headers{}, body, "application/json",
-                            [&sink](const char* data, size_t len) {
-                                return sink.write(data, len);
-                            });
-                sink.done();
-                return true;
-            });
+        if (body.value("stream", false)) {
+            res.set_chunked_content_provider("text/event-stream; charset=utf-8",
+                [guard, host = backend.host, port = backend.port, body = req.body](size_t /*offset*/, httplib::DataSink& sink) {
+                    httplib::Client client(host, port);
+                    client.Post("/v1/chat/completions", httplib::Headers{}, body, "application/json",
+                                [&sink](const char* data, size_t len) {
+                                    return sink.write(data, len);
+                                });
+                    sink.done();
+                    return true;
+                });
+            return;
+        }
+        // forward
+        auto upstream = client.Post("/v1/chat/completions", req.body, "application/json");
+        if (!upstream) {
+            if (upstream.error() == httplib::Error::Read) {
+                send_error(res, 504, "backend took too long to answer");
+            } else {
+                send_error(res, 502, "backend did not respond: " + httplib::to_string(upstream.error()));
+            }
+            return;
+        }
+        res.status = upstream->status;
+        res.set_content(upstream->body, "application/json");
     }
 
 
