@@ -8,8 +8,12 @@ User=YOUR_USER
 ExecStart=/home/YOUR_USER/llama.cpp/build/bin/llama-server \
     -m /srv/models/gemma-4-12b/gemma-4-12b-it-UD-Q4_K_XL.gguf \
     -ngl 99 \
-    -c 8192 \
+    -c 262144 \
+    -fa on \
+    -ctk q8_0 \
+    -ctv q8_0 \
+    -np 1 \
     --host YOUR_PC_IP \
     --port 8095 \
-    --no-webui
+    --no-ui
 Restart=on-failure

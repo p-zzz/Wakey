@@ -26,8 +26,7 @@ questions a day wastes power and wears out hardware. A Raspberry Pi is the oppos
 always on, ~5 W, but only fast enough for small models. Wakey combines the two:
 
 - **Small questions** go to Qwen3-1.7B on the Pi, instantly.
-- **Bigger work** goes to Gemma 4 12B on the PC, which boots on demand (~35 s cold start)
-  and shuts down when *you* say so.
+- **Bigger work** goes to Gemma 4 12B on the PC, which boots on demand and shuts down when *you* say so.
 - **You stay in control.** The PC is never woken or powered off on its own, and booting it
   by hand (to use it for something else) never starts the model server.
 
@@ -93,16 +92,13 @@ Wakey (50 runs, measured from the Pi with [`bench/overhead.sh`](bench/overhead.s
 
 Wakey adds about a millisecond per request, which is well under 0.1 % of a typical answer.
 
-**Cold start** (PC powered off → model ready): **~35 s**, of which ~29 s is booting and
-~6 s is loading the model onto the GPU.
-
 Full results and conditions: [`bench/results.md`](bench/results.md).
 
 ## Using it
 
 ```bash
 wakeyctl status                      # all backends: up/down, running requests, context size
-wakeyctl wake pc                     # boot the PC and start its model (~35 s)
+wakeyctl wake pc                     # boot the PC and start its model
 wakeyctl ask "what is a KV cache?"   # one question, default model
 wakeyctl ask --think "..." gemma-4-12b
 wakeyctl chat [--think] [model]      # interactive chat
@@ -241,6 +237,5 @@ tests/               unit tests (CIDR parsing and matching)
 
 ## Roadmap
 
-- Streaming responses (needed for most chat front-ends)
-- More cold-start measurements
+- ~~Streaming responses (needed for most chat front-ends)~~ (done)
 - Optional idle shutdown, opt-in only
