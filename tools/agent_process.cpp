@@ -8,6 +8,7 @@
 #include <spawn.h>
 #include <stdexcept>
 #include <string>
+#include <sys/poll.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -100,25 +101,37 @@ namespace gw {
         }
     }
 
-    std::optional<json> agent_next_event(AgentProcess &agent) {
+    NextEvent agent_next_event(AgentProcess& agent, int timeout_ms) {
         while (true) {
-            const std::size_t pos = agent.buffer.find("\n");
-            // Return a complete line if already in buffer
+            // Return a complete line without waiting
+            const std::size_t pos = agent.buffer.find('\n');
             if (pos != std::string::npos) {
                 const std::string line = agent.buffer.substr(0, pos);
                 agent.buffer.erase(0, pos + 1);
-                const auto j = json::parse(line, nullptr, false);
+                auto j = nlohmann::json::parse(line, nullptr, false);
                 if (j.is_discarded()) continue;
-                return j;
+                return {NextEvent::Event, std::move(j)};
             }
-            // Otherwise keep reading to buffer
+
+            // Wait for data with timeout_ms
+            pollfd p{};
+            p.fd = agent.from_child;
+            p.events = POLLIN;
+            const int r = poll(&p, 1, timeout_ms);
+            if (r == 0) return {NextEvent::Timeout, {}};
+            if (r < 0) {
+                if (errno == EINTR) return {NextEvent::Timeout, {}};
+                throw std::runtime_error(std::string("poll failed: ") + std::strerror(errno));
+            }
+
+            // 3. Data (or end of file) available: read once then back to top
             char chunk[4096];
             const ssize_t n = ::read(agent.from_child, chunk, sizeof chunk);
             if (n < 0) {
-                if (errno == EINTR) continue;
+                if (errno == EINTR) return {NextEvent::Timeout, {}};
                 throw std::runtime_error(std::string("cannot read from agent: ") + std::strerror(errno));
             }
-            if (n == 0) return std::nullopt;
+            if (n == 0) return {NextEvent::Closed, {}};
             agent.buffer.append(chunk, static_cast<std::size_t>(n));
         }
     }

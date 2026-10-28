@@ -475,6 +475,7 @@ struct CommandInfo {
 constexpr CommandInfo kCommands[] = {
     {"/model",    "[name]",    "show or switch the model"},
     {"/think",    "",          "toggle thinking on/off"},
+    {"/yes",      "",          "toggle auto-approve in agent mode"},
     {"/clear",    "",          "start a new conversation"},
     {"/status",   "",          "show all backends"},
     {"/wake",     "<backend>", "wake a backend and start its model"},
@@ -802,10 +803,18 @@ bool render_event(const json& ev, ChatState& st, gw::AgentProcess& agent) {
 
 void run_agent_turn(const std::string& line, ChatState& st, gw::AgentProcess& agent) {
     agent_send(agent, {{"type", "user"}, {"content", line}});
-    while (auto ev = agent_next_event(agent)) {
-        if (!render_event(*ev, st, agent)) return;     // done
+    while (true) {
+        const gw::NextEvent ev = agent_next_event(agent, 100);
+            switch (ev.kind) {
+                case gw::NextEvent::Event:
+                    if (!render_event(ev.event, st, agent)) return;
+                    break;
+                case gw::NextEvent::Timeout:
+                    break;
+                case gw::NextEvent::Closed:
+                    throw std::runtime_error("agent backend exited (see ~/.local/state/wakey/agent.log)");
+            }    // done
     }
-    throw std::runtime_error("agent backend exited (see ~/.local/state/wakey/agent.log)");
 }
 
 int cmd_chat(const gw::ClientConfig& conf, const std::string& model, bool think,
@@ -831,10 +840,13 @@ int cmd_chat(const gw::ClientConfig& conf, const std::string& model, bool think,
         st.agent = AgentState{.workspace = "", .auto_approve = yes};
         gw::agent_start(agent, st.model, st.info.n_ctx);
 
-        const auto ready = gw::agent_next_event(agent);
-        if (!ready || ready->value("type", "") != "ready")
+        gw::NextEvent ready;
+        do { ready = gw::agent_next_event(agent, -1); } while (ready.kind == gw::NextEvent::Timeout);
+        if (ready.kind == gw::NextEvent::Event && ready.event.value("type", "") == "error")
+            throw std::runtime_error(ready.event.value("message", "agent backend failed to start"));
+        if (ready.kind != gw::NextEvent::Event || ready.event.value("type", "") != "ready")
             throw std::runtime_error("agent backend did not start (see ~/.local/state/wakey/agent.log)");
-        st.agent->workspace = ready->value("workspace", "");
+        st.agent->workspace = ready.event.value("workspace", "");
     }
 
     replxx::Replxx rx;
@@ -926,13 +938,16 @@ int main(int argc, char** argv) {
         }
 
         if (cmd == "chat" || cmd == "agent") {
-            int i = 2;
             bool think = false, yes = false;
-            while (arg(i) == "--think" || arg(i) == "--yes") {
-                (arg(i) == "--think" ? think : yes) = true;
-                ++i;
+            std::string model;
+            for (int i = 2; i < argc; ++i) {
+                const std::string a = argv[i];
+                if (a == "--think") think = true;
+                else if (a == "--yes") yes = true;
+                else if (a.starts_with("--")) { print_error("unknown option " + a); return 2; }
+                else model = a;
             }
-            const std::string model = arg(i).empty() ? conf.default_model : arg(i);
+            if (model.empty()) model = conf.default_model;
             return cmd_chat(conf, model, think, cmd == "agent", yes);
         }
 

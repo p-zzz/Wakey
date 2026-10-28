@@ -1,6 +1,5 @@
 #pragma once
 
-#include <optional>
 #include <string>
 #include <nlohmann/json.hpp>
 #include <sys/types.h>
@@ -20,8 +19,13 @@ namespace gw {
         AgentProcess& operator=(const AgentProcess&) = delete;
     };
 
+    struct NextEvent {
+        enum Kind { Event, Timeout, Closed } kind;
+        nlohmann::json event;
+    };
+
     void agent_start(AgentProcess& agent, const std::string& model, int n_ctx);
     void agent_send(AgentProcess& agent, const nlohmann::json& msg);
-    std::optional<nlohmann::json> agent_next_event(AgentProcess& agent);
+    NextEvent agent_next_event(AgentProcess& agent, int timeout_ms);
 
 }   // Namespace gw
