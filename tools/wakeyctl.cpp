@@ -8,6 +8,7 @@
 
 #include "client_config.hpp"
 #include "keyfile.hpp"
+#include "agent_process.hpp"
 
 #include <httplib.h>
 #include <nlohmann/json.hpp>
@@ -158,12 +159,12 @@ auto with_spinner(const std::string& label, httplib::Client& cli, F work, Output
                   << err(ansi::dim, std::to_string(secs) + "s" + (stopped ? "  cancelling" : "  (Ctrl+C to cancel)"))
                   << "\033[K" << std::flush;
     }
-    // Erase the spinner line, unless streamed text is on it now (that would wipe the answer).
+    // Erase the spinner line, unless streamed text is on it now
     if (animate && !text_started()) std::cerr << "\r\033[K" << std::flush;
     sigaction(SIGINT, &old, nullptr);
 
     if (stopped) {
-        try { result.get(); } catch (...) {}   // the aborted request fails; that's expected
+        try { result.get(); } catch (...) {}
         throw Cancelled();
     }
     return result.get();
@@ -495,6 +496,11 @@ void print_help() {
     std::cout << out(ansi::dim, "  Tab completes commands, models and backends · ↑/↓ history · Ctrl+C cancels") << '\n';
 }
 
+struct AgentState {
+    std::string workspace;      // from the ready event
+    bool auto_approve = false;  // /yes toggles it
+};
+
 struct ChatState {
     std::string model;
     bool think = false;
@@ -503,6 +509,7 @@ struct ChatState {
     int ctx_used = 0;                    // tokens in the context after the last reply
     std::vector<std::string> models;     // for tab completion
     std::vector<std::string> backends;
+    std::optional<AgentState> agent;
 };
 
 // Updates everything the chat knows from a fresh /admin/status.
@@ -512,6 +519,16 @@ void apply_status(ChatState& st, const json& status) {
     if (const auto info = find_model(status, st.model)) st.info = *info;
 }
 
+std::string shorten_home(std::string path) {
+    const char* home_env = std::getenv("HOME");
+    if (home_env != nullptr && *home_env != '\0') {
+        const std::string home = home_env;
+        if (path == home || path.starts_with(home + "/"))
+            path.replace(0, home.size(), "~");
+    }
+    return path;
+}
+
 // One line above the prompt: model · backend · thinking · context fill.
 void print_status_bar(const ChatState& st) {
     std::string line = out(ansi::dim, "── ") + out(ansi::bold, st.model);
@@ -519,7 +536,15 @@ void print_status_bar(const ChatState& st) {
         line += out(ansi::dim, " · " + st.info.backend + " ")
               + (st.info.up ? out(ansi::green, "up") : out(ansi::red, "down"));
     }
-    line += out(ansi::dim, std::string(" · thinking ") + (st.think ? "on" : "off"));
+    if (!st.agent) {
+        line += out(ansi::dim, std::string(" · thinking ") + (st.think ? "on" : "off"));
+    }
+    if (st.agent) {
+        std::string workspace = shorten_home(st.agent->workspace);
+        line += out(ansi::dim, " · " + workspace)
+            + out(ansi::dim, std::string(" · auto-approve "))
+            + (st.agent->auto_approve ? out(ansi::red, "ON") : out(ansi::green, "OFF"));
+    }
 
     if (st.info.n_ctx > 0) {
         const int pct = std::min(100, st.ctx_used * 100 / st.info.n_ctx);
@@ -646,6 +671,16 @@ bool run_command(const std::string& line, ChatState& st, const gw::ClientConfig&
         apply_status(st, status);
         return true;
     }
+    if (st.agent && (cmd == "/think" || cmd == "/model" || cmd == "/clear")) {
+        print_error(cmd + " is not available in agent mode");
+        return true;
+    }
+    if (cmd == "/yes") {
+        if (!st.agent) { print_error("/yes only works in agent mode"); return true; }
+        st.agent->auto_approve = !st.agent->auto_approve;
+        std::cout << "auto-approve " << (st.agent->auto_approve ? "on" : "off") << '\n';
+        return true;
+    }
     if (cmd == "/model") {
         if (arg.empty()) { std::cout << "current model: " << st.model << '\n'; return true; }
         const json status = fetch_status(conf);
@@ -720,12 +755,66 @@ void run_turn(const std::string& line, ChatState& st, const gw::ClientConfig& co
     }
 }
 
-int cmd_chat(const gw::ClientConfig& conf, const std::string& model, bool think) {
+std::string preview(const std::string& text, int max_lines = 3) {
+    std::istringstream in(text);
+    std::string line, shown;
+    int n = 0;
+    while (std::getline(in, line)) {
+        if (n++ == max_lines) { shown += "  …\n"; break; }
+        shown += "  " + line + "\n";
+    }
+    return shown;
+}
+
+bool render_event(const json& ev, ChatState& st, gw::AgentProcess& agent) {
+    const std::string type = ev.value("type", "");
+
+    if (type == "text") {
+        std::cout << ev.value("delta", "") << std::flush;
+    } else if (type == "text_end") {
+        std::cout << '\n';
+    } else if (type == "tool_call") {
+        std::cout << out(ansi::dim, "→ " + ev.value("name", "") + "(" + ev.value("args", "").substr(0, 80) + ")") << '\n';
+    } else if (type == "approve") {
+        const int id = ev.value("id", 0);
+        const std::string command = ev.value("command", "");
+        bool ok = st.agent->auto_approve;
+        if (ok) std::cout << out(ansi::yellow, "auto-approved: " + command) << '\n';
+        else    ok = confirm("run '" + command + "'?");
+        agent_send(agent, {{"type", "approval"}, {"id", id}, {"ok", ok}});
+    } else if (type == "done") {
+        return false;
+    } else if (type == "tool_result") {
+        std::cout << out(ansi::dim, preview(ev.value("output", "")));
+    } else if (type == "usage") {
+        st.ctx_used = ev.value("used", 0);
+        if (st.info.n_ctx == 0) st.info.n_ctx = ev.value("limit", 0);
+    } else if (type == "warning") {
+        std::cerr << out(ansi::yellow, "warning: " + ev.value("message", "")) << '\n';
+    } else if (type == "error") {
+        std::string msg = ev.value("message", "");
+        if (msg.starts_with("HTTP 503")) msg += " (try /wake <backend>)";
+        std::cerr << out(ansi::red, "error: " + msg) << '\n';
+    }
+    return true;
+}
+
+
+void run_agent_turn(const std::string& line, ChatState& st, gw::AgentProcess& agent) {
+    agent_send(agent, {{"type", "user"}, {"content", line}});
+    while (auto ev = agent_next_event(agent)) {
+        if (!render_event(*ev, st, agent)) return;     // done
+    }
+    throw std::runtime_error("agent backend exited (see ~/.local/state/wakey/agent.log)");
+}
+
+int cmd_chat(const gw::ClientConfig& conf, const std::string& model, bool think,
+            const bool agent_mode, bool yes) {
     ChatState st;
     st.model = model;
     st.think = think;
 
-    // Fail early with a clear message if Wakey is unreachable or the model doesn't exist.
+    // Fail if Wakey is unreachable or the model doesn't exist.
     const json status = fetch_status(conf);
     if (!find_model(status, st.model)) {
         print_error("unknown model '" + st.model + "'");
@@ -736,12 +825,25 @@ int cmd_chat(const gw::ClientConfig& conf, const std::string& model, bool think)
     }
     apply_status(st, status);
 
+    gw::AgentProcess agent;
+    if (agent_mode) {
+        signal(SIGPIPE, SIG_IGN);
+        st.agent = AgentState{.workspace = "", .auto_approve = yes};
+        gw::agent_start(agent, st.model, st.info.n_ctx);
+
+        const auto ready = gw::agent_next_event(agent);
+        if (!ready || ready->value("type", "") != "ready")
+            throw std::runtime_error("agent backend did not start (see ~/.local/state/wakey/agent.log)");
+        st.agent->workspace = ready->value("workspace", "");
+    }
+
     replxx::Replxx rx;
     setup_replxx(rx, st);
     const std::string hist = history_path();
     load_history(rx, hist);
 
-    std::cout << out(ansi::bold, "wakey chat") << out(ansi::dim, "  ·  /help for commands  ·  Ctrl+D to quit") << '\n';
+    std::string msg = agent_mode ? "wakey agent · working in " + shorten_home(st.agent->workspace) : "wakey chat";
+    std::cout << out(ansi::bold, msg) << out(ansi::dim, "  ·  /help for commands  ·  Ctrl+D to quit") << '\n';
     if (!st.info.up)
         std::cout << out(ansi::yellow, st.info.backend + " is down, use /wake " + st.info.backend) << '\n';
 
@@ -762,7 +864,8 @@ int cmd_chat(const gw::ClientConfig& conf, const std::string& model, bool think)
                 append_history(hist, line);
                 if (!run_command(line, st, conf, rx)) break;
             } else {
-                run_turn(line, st, conf);
+                if (st.agent) run_agent_turn(line, st, agent);
+                else run_turn(line, st, conf);
             }
         } catch (const Cancelled&) {
             std::cerr << err(ansi::yellow, "cancelled") << '\n';
@@ -778,7 +881,6 @@ int cmd_chat(const gw::ClientConfig& conf, const std::string& model, bool think)
     std::cout << '\n';
     return 0;
 }
-
 }  // namespace
 
 // ===========================================================================
@@ -823,12 +925,15 @@ int main(int argc, char** argv) {
             return cmd_ask(conf, model, think, question);
         }
 
-        if (cmd == "chat") {
+        if (cmd == "chat" || cmd == "agent") {
             int i = 2;
-            const bool think = (arg(i) == "--think");
-            if (think) ++i;
+            bool think = false, yes = false;
+            while (arg(i) == "--think" || arg(i) == "--yes") {
+                (arg(i) == "--think" ? think : yes) = true;
+                ++i;
+            }
             const std::string model = arg(i).empty() ? conf.default_model : arg(i);
-            return cmd_chat(conf, model, think);
+            return cmd_chat(conf, model, think, cmd == "agent", yes);
         }
 
         print_usage();

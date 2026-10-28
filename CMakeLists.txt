@@ -31,7 +31,7 @@ target_include_directories(json INTERFACE third_party)
 # replxx: line editing for `wakeyctl chat` (vendored, BSD licence)
 add_subdirectory(third_party/replxx EXCLUDE_FROM_ALL)
 
-add_executable(wakeyctl tools/wakeyctl.cpp)
+add_executable(wakeyctl tools/wakeyctl.cpp tools/agent_process.cpp)
 target_link_libraries(wakeyctl PRIVATE gateway_core httplib json replxx::replxx)
 target_compile_options(wakeyctl PRIVATE -Wall -Wextra)
 
