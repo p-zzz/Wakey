@@ -94,6 +94,7 @@ namespace gw {
             const ssize_t n = ::write(agent.to_child, p, left);
             if (n < 0) {
                 if (errno == EINTR) continue;
+                if (errno == EPIPE) throw gw::AgentGone("agent backend exited (see ~/.local/state/wakey/agent.log)");
                 throw std::runtime_error(std::string("cannot write to agent: ") + std::strerror(errno));
             }
             p += n;

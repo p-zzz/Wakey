@@ -40,9 +40,7 @@ using Clock = std::chrono::steady_clock;
 
 namespace {
 
-// ===========================================================================
 // Terminal styling
-// ===========================================================================
 
 // Colors only when writing to a terminal, and never if NO_COLOR is set
 // (https://no-color.org). Decided once in main().
@@ -84,15 +82,28 @@ void print_error(const std::string& msg) {
     std::cerr << err(ansi::red, "error: " + msg) << '\n';
 }
 
-// ===========================================================================
 // Ctrl+C handling and the spinner
-// ===========================================================================
 
 // While a request is running the terminal is in normal mode, so Ctrl+C sends SIGINT.
 // The handler only sets a flag;
 // the spinner loop sees it and cancels the request.
 volatile std::sig_atomic_t g_interrupted = 0;
 extern "C" void on_sigint(int) { g_interrupted = 1; }
+
+struct SigintGuard {
+    struct sigaction old {};
+    SigintGuard() {
+        g_interrupted = 0;
+        struct sigaction sa {};
+        sa.sa_handler = on_sigint;
+        sigemptyset(&sa.sa_mask);
+        sigaction(SIGINT, &sa, &old);
+    }
+    ~SigintGuard() { sigaction(SIGINT, &old, nullptr); }
+
+    SigintGuard(const SigintGuard&) = delete;
+    SigintGuard& operator=(const SigintGuard&) = delete;
+};
 
 struct Cancelled : std::runtime_error {
     Cancelled() : std::runtime_error("cancelled") {}
@@ -170,9 +181,7 @@ auto with_spinner(const std::string& label, httplib::Client& cli, F work, Output
     return result.get();
 }
 
-// ===========================================================================
 // HTTP helpers
-// ===========================================================================
 
 httplib::Headers auth(const std::string& key) {
     return httplib::Headers{{"Authorization", "Bearer " + key}};
@@ -198,7 +207,7 @@ std::string error_message(int status, const std::string& body) {
     return msg;
 }
 
-// Throws with a readable message on connection errors and non-2xx answers.
+// Throws on connection errors and non-2xx answers.
 // Understands both Wakey's {"error": "..."} and llama-server's {"error": {"message": "..."}}.
 json check_response(httplib::Result& res, const gw::ClientConfig& conf) {
     if (!res) throw std::runtime_error("cannot reach Wakey at " + conf.url + " (is WireGuard up? is Wakey running?)");
@@ -302,9 +311,7 @@ StreamResult stream_chat(httplib::Client& cli, const gw::ClientConfig& conf,
     return result;
 }
 
-// ===========================================================================
 // Reading /admin/status
-// ===========================================================================
 
 struct ModelInfo {
     std::string backend;   // name of the backend serving the model
@@ -405,13 +412,15 @@ std::string print_reply(const json& body, int& ctx_used, double seconds) {
 bool confirm(const std::string& question) {
     std::cout << question << std::flush;
     std::string ans;
-    std::getline(std::cin, ans);
+    if (!std::getline(std::cin, ans)) {
+        std::cin.clear();          // interrupted or end of input
+        std::cout << '\n';
+        return false;
+    }
     return ans == "y" || ans == "Y" || ans == "yes" || ans == "Yes";
 }
 
-// ===========================================================================
 // One-shot commands
-// ===========================================================================
 
 void print_usage() {
     std::cerr << "usage: wakeyctl status\n"
@@ -462,9 +471,7 @@ int cmd_ask(const gw::ClientConfig& conf, const std::string& model, bool think, 
     return 0;
 }
 
-// ===========================================================================
 // chat: the interactive TUI
-// ===========================================================================
 
 struct CommandInfo {
     const char* name;
@@ -781,9 +788,10 @@ bool render_event(const json& ev, ChatState& st, gw::AgentProcess& agent) {
         const std::string command = ev.value("command", "");
         bool ok = st.agent->auto_approve;
         if (ok) std::cout << out(ansi::yellow, "auto-approved: " + command) << '\n';
-        else    ok = confirm("run '" + command + "'?");
+        else    ok = confirm("run '" + command + "'? [y/N]: ");
         agent_send(agent, {{"type", "approval"}, {"id", id}, {"ok", ok}});
     } else if (type == "done") {
+        if (ev.value("reason", "") == "cancelled") std::cout << err(ansi::yellow, "cancelled") << '\n';
         return false;
     } else if (type == "tool_result") {
         std::cout << out(ansi::dim, preview(ev.value("output", "")));
@@ -802,18 +810,24 @@ bool render_event(const json& ev, ChatState& st, gw::AgentProcess& agent) {
 
 
 void run_agent_turn(const std::string& line, ChatState& st, gw::AgentProcess& agent) {
+    SigintGuard guard;
+    bool cancel_sent = false;
     agent_send(agent, {{"type", "user"}, {"content", line}});
     while (true) {
         const gw::NextEvent ev = agent_next_event(agent, 100);
-            switch (ev.kind) {
-                case gw::NextEvent::Event:
-                    if (!render_event(ev.event, st, agent)) return;
-                    break;
-                case gw::NextEvent::Timeout:
-                    break;
-                case gw::NextEvent::Closed:
-                    throw std::runtime_error("agent backend exited (see ~/.local/state/wakey/agent.log)");
-            }    // done
+        switch (ev.kind) {
+            case gw::NextEvent::Event:
+                if (!render_event(ev.event, st, agent)) return;
+                break;
+            case gw::NextEvent::Timeout:
+                if (g_interrupted && !cancel_sent) {
+                    kill(agent.pid, SIGINT);
+                    cancel_sent = true;
+                }
+                break;
+            case gw::NextEvent::Closed:
+                throw gw::AgentGone("agent backend exited (see ~/.local/state/wakey/agent.log)");
+        }
     }
 }
 
@@ -881,6 +895,9 @@ int cmd_chat(const gw::ClientConfig& conf, const std::string& model, bool think,
             }
         } catch (const Cancelled&) {
             std::cerr << err(ansi::yellow, "cancelled") << '\n';
+        } catch (const gw::AgentGone& e) {
+            print_error(e.what());
+            return 1;                      // end session
         } catch (const std::exception& e) {
             std::string msg = e.what();
             if (msg.starts_with("HTTP 503") && !st.info.backend.empty()) {
@@ -895,9 +912,7 @@ int cmd_chat(const gw::ClientConfig& conf, const std::string& model, bool think,
 }
 }  // namespace
 
-// ===========================================================================
 // main
-// ===========================================================================
 
 int main(int argc, char** argv) {
     g_color_out = isatty(STDOUT_FILENO) && std::getenv("NO_COLOR") == nullptr;
